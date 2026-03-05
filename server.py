@@ -35,17 +35,29 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 if _mcp_available:
+    # Disable host header validation so Railway/proxy domains are accepted
+    import os
+    os.environ["MCP_DISABLE_TRANSPORT_SECURITY"] = "1"
+
     try:
         mcp = FastMCP(
             "QR Forge",
             description="Generate QR codes for URLs, WiFi, vCards, Email, and SMS. Returns a downloadable PDF.",
         )
     except TypeError:
-        # Older versions of FastMCP don't accept 'description'
-        mcp = FastMCP("QR Forge")
+        try:
+            mcp = FastMCP("QR Forge")
+        except Exception:
+            mcp = FastMCP()
+
+    # Also try to disable validation via the settings object
+    try:
+        mcp.settings.transport_security = False
+    except (AttributeError, TypeError):
+        pass
+
     _tool_decorator = mcp.tool()
 else:
-    # Fallback: no-op decorator so functions are still callable without MCP installed
     mcp = None
     def _tool_decorator(func):
         return func
