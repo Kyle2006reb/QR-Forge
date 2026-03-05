@@ -762,21 +762,40 @@ if __name__ == "__main__":
     port = args.port or int(os.environ.get("PORT", 0))
 
     if port:
-        # Try different FastMCP.run() signatures across mcp package versions
+        host = "0.0.0.0"
+
+        # Force host/port via environment for any version of FastMCP
+        os.environ["FASTMCP_PORT"] = str(port)
+        os.environ["FASTMCP_HOST"] = host
+        os.environ["HOST"] = host
+        os.environ["PORT"] = str(port)
+        os.environ["UVICORN_HOST"] = host
+        os.environ["UVICORN_PORT"] = str(port)
+
+        # Also try to set it on the mcp settings object directly
         try:
-            mcp.run(transport="sse", sse_params={"port": port})
-        except TypeError:
+            mcp.settings.host = host
+            mcp.settings.port = port
+        except (AttributeError, TypeError):
+            pass
+
+        # Try each run signature until one works
+        started = False
+        for run_kwargs in [
+            {"transport": "sse", "sse_params": {"host": host, "port": port}},
+            {"transport": "sse", "host": host, "port": port},
+            {"transport": "sse"},
+        ]:
             try:
-                mcp.settings.port = port
-                mcp.run(transport="sse")
-            except (TypeError, AttributeError):
-                try:
-                    mcp.run(transport="sse", port=port)
-                except TypeError:
-                    # Last resort: set host/port via environment and run
-                    os.environ["FASTMCP_PORT"] = str(port)
-                    os.environ["HOST"] = "0.0.0.0"
-                    os.environ["PORT"] = str(port)
-                    mcp.run(transport="sse")
+                print(f"Starting QR Forge MCP server on {host}:{port} ...")
+                mcp.run(**run_kwargs)
+                started = True
+                break
+            except TypeError:
+                continue
+
+        if not started:
+            print("ERROR: Could not start SSE transport. Check your mcp package version.")
+            sys.exit(1)
     else:
         mcp.run(transport="stdio")
