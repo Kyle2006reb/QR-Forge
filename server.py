@@ -747,6 +747,8 @@ def list_supported_types() -> str:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import os
+
     if not _mcp_available:
         print("ERROR: The 'mcp' package is not installed.")
         print("To run the MCP server:  pip install mcp")
@@ -757,7 +759,24 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=None, help="Port for SSE transport (omit for stdio)")
     args = parser.parse_args()
 
-    if args.port:
-        mcp.run(transport="sse", sse_params={"port": args.port})
+    port = args.port or int(os.environ.get("PORT", 0))
+
+    if port:
+        # Try different FastMCP.run() signatures across mcp package versions
+        try:
+            mcp.run(transport="sse", sse_params={"port": port})
+        except TypeError:
+            try:
+                mcp.settings.port = port
+                mcp.run(transport="sse")
+            except (TypeError, AttributeError):
+                try:
+                    mcp.run(transport="sse", port=port)
+                except TypeError:
+                    # Last resort: set host/port via environment and run
+                    os.environ["FASTMCP_PORT"] = str(port)
+                    os.environ["HOST"] = "0.0.0.0"
+                    os.environ["PORT"] = str(port)
+                    mcp.run(transport="sse")
     else:
         mcp.run(transport="stdio")
