@@ -212,17 +212,46 @@ def _make_pdf(
 
 
 # ---------------------------------------------------------------------------
+# In-memory PDF store for download links
+# ---------------------------------------------------------------------------
+
+import hashlib
+import time
+
+_pdf_store: dict[str, dict] = {}
+_BASE_URL = ""  # Set at startup from environment
+
+
+def _store_pdf(pdf_b64: str, summary: str) -> str:
+    """Store a PDF and return a unique download ID."""
+    pdf_id = hashlib.md5(f"{summary}{time.time()}".encode()).hexdigest()[:12]
+    _pdf_store[pdf_id] = {
+        "pdf_b64": pdf_b64,
+        "summary": summary,
+        "created": time.time(),
+    }
+    # Clean up old PDFs (keep last 100)
+    if len(_pdf_store) > 100:
+        oldest_keys = sorted(_pdf_store, key=lambda k: _pdf_store[k]["created"])
+        for k in oldest_keys[:len(_pdf_store) - 100]:
+            del _pdf_store[k]
+    return pdf_id
+
+
+# ---------------------------------------------------------------------------
 # Shared response builder
 # ---------------------------------------------------------------------------
 
 
 def _success(pdf_b64: str, qr_type: str, summary: str) -> dict[str, Any]:
+    pdf_id = _store_pdf(pdf_b64, summary)
+    download_url = f"{_BASE_URL}/download/{pdf_id}" if _BASE_URL else f"/download/{pdf_id}"
     return {
         "success": True,
         "type": qr_type,
         "summary": summary,
-        "pdf_base64": pdf_b64,
-        "instructions": "Decode the pdf_base64 string and save it as a .pdf file to download your QR code.",
+        "download_url": download_url,
+        "instructions": f"Your QR code is ready! Download it here: {download_url}",
     }
 
 
@@ -760,6 +789,8 @@ def list_supported_types() -> str:
 
 if __name__ == "__main__":
     import os
+    from starlette.requests import Request
+    from starlette.responses import Response
 
     if not _mcp_available:
         print("ERROR: The 'mcp' package is not installed.")
@@ -773,6 +804,13 @@ if __name__ == "__main__":
 
     port = args.port or int(os.environ.get("PORT", 0))
 
+    # Set base URL for download links
+    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    if railway_domain:
+        _BASE_URL = f"https://{railway_domain}"
+    elif port:
+        _BASE_URL = f"http://localhost:{port}"
+
     if port:
         host = "0.0.0.0"
 
@@ -784,30 +822,107 @@ if __name__ == "__main__":
         os.environ["UVICORN_HOST"] = host
         os.environ["UVICORN_PORT"] = str(port)
 
-        # Also try to set it on the mcp settings object directly
         try:
             mcp.settings.host = host
             mcp.settings.port = port
         except (AttributeError, TypeError):
             pass
 
-        # Try each run signature until one works
-        started = False
-        for run_kwargs in [
-            {"transport": "sse", "sse_params": {"host": host, "port": port}},
-            {"transport": "sse", "host": host, "port": port},
-            {"transport": "sse"},
-        ]:
-            try:
-                print(f"Starting QR Forge MCP server on {host}:{port} ...")
-                mcp.run(**run_kwargs)
-                started = True
-                break
-            except TypeError:
-                continue
+        # Add the PDF download route to the MCP app
+        try:
+            from starlette.routing import Route
 
-        if not started:
-            print("ERROR: Could not start SSE transport. Check your mcp package version.")
-            sys.exit(1)
+            async def download_pdf(request: Request) -> Response:
+                pdf_id = request.path_params["pdf_id"]
+                entry = _pdf_store.get(pdf_id)
+                if not entry:
+                    return Response("QR code not found or expired.", status_code=404)
+                pdf_bytes = base64.b64decode(entry["pdf_b64"])
+                return Response(
+                    content=pdf_bytes,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="qr-code-{pdf_id}.pdf"',
+                    },
+                )
+
+            # Get the underlying Starlette app and add our route
+            app = mcp._mcp_server if hasattr(mcp, '_mcp_server') else None
+            starlette_app = getattr(mcp, '_sse_app', None) or getattr(mcp, 'sse_app', None)
+
+            if starlette_app is None:
+                # Build the SSE app first by accessing it
+                try:
+                    starlette_app = mcp.sse_app()
+                except Exception:
+                    pass
+
+            # Add route via custom middleware if direct route addition fails
+            from starlette.applications import Starlette
+            from starlette.middleware import Middleware
+
+            original_run = mcp.run
+
+            def patched_run(**kwargs):
+                """Patch the run to inject our download route."""
+                import uvicorn
+                from starlette.routing import Route, Mount
+
+                # Create a wrapper app that handles /download/ and passes everything else to MCP
+                async def download_handler(request):
+                    pdf_id = request.path_params["pdf_id"]
+                    entry = _pdf_store.get(pdf_id)
+                    if not entry:
+                        return Response("QR code not found or expired.", status_code=404)
+                    pdf_bytes = base64.b64decode(entry["pdf_b64"])
+                    return Response(
+                        content=pdf_bytes,
+                        media_type="application/pdf",
+                        headers={
+                            "Content-Disposition": f'attachment; filename="qr-code-{pdf_id}.pdf"',
+                        },
+                    )
+
+                # Get the MCP SSE app
+                try:
+                    mcp_app = mcp.sse_app()
+                except Exception:
+                    # Fallback: just run normally
+                    original_run(**kwargs)
+                    return
+
+                routes = [
+                    Route("/download/{pdf_id}", download_handler),
+                    Mount("/", app=mcp_app),
+                ]
+                combined_app = Starlette(routes=routes)
+
+                print(f"Starting QR Forge MCP server on {host}:{port} ...")
+                print(f"Download endpoint: {_BASE_URL}/download/{{id}}")
+                uvicorn.run(combined_app, host=host, port=port)
+
+            patched_run()
+
+        except Exception as e:
+            print(f"Could not add download route: {e}")
+            print("Falling back to standard MCP server...")
+
+            started = False
+            for run_kwargs in [
+                {"transport": "sse", "sse_params": {"host": host, "port": port}},
+                {"transport": "sse", "host": host, "port": port},
+                {"transport": "sse"},
+            ]:
+                try:
+                    print(f"Starting QR Forge MCP server on {host}:{port} ...")
+                    mcp.run(**run_kwargs)
+                    started = True
+                    break
+                except TypeError:
+                    continue
+
+            if not started:
+                print("ERROR: Could not start SSE transport.")
+                sys.exit(1)
     else:
         mcp.run(transport="stdio")
