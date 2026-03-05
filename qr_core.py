@@ -1,11 +1,12 @@
 """
 QR Forge - Core Logic
 ======================
-Shared QR code generation functions.
+Shared QR code generation functions used by both the MCP server and the Vercel API.
 """
 
 import base64
 import io
+import json
 import re
 import uuid
 from typing import Any
@@ -18,16 +19,20 @@ from reportlab.lib.units import inch
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
+
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
 
+
 def _validate_email(email: str) -> bool:
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email))
+
 
 def _validate_phone(phone: str) -> bool:
     digits = re.sub(r"[\s\-\(\)\+]", "", phone)
     return digits.isdigit() and 7 <= len(digits) <= 15
+
 
 def _sanitize_url(url: str) -> str:
     url = url.strip()
@@ -35,9 +40,11 @@ def _sanitize_url(url: str) -> str:
         url = "https://" + url
     return url
 
+
 # ---------------------------------------------------------------------------
 # QR image + PDF generation helpers
 # ---------------------------------------------------------------------------
+
 
 def _hex_to_rgba(hex_color: str) -> tuple:
     hex_color = hex_color.lstrip("#")
@@ -48,12 +55,14 @@ def _hex_to_rgba(hex_color: str) -> tuple:
     b = int(hex_color[4:6], 16)
     return (r, g, b, 255)
 
+
 def _make_qr_image(
     data: str,
     style: str = "square",
     fg_color: str = "#000000",
     bg_color: str = "#FFFFFF",
 ) -> io.BytesIO:
+    """Generate a QR code PNG and return it as a BytesIO buffer."""
     qr = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_H,
@@ -111,7 +120,9 @@ def _make_qr_image(
     buf.seek(0)
     return buf
 
+
 def _make_pdf(qr_buf: io.BytesIO, title: str, subtitle: str, raw_data: str) -> str:
+    """Wrap the QR image in a clean PDF and return it as a base64 string."""
     pdf_buf = io.BytesIO()
     c = canvas.Canvas(pdf_buf, pagesize=letter)
     page_w, page_h = letter
@@ -131,10 +142,7 @@ def _make_pdf(qr_buf: io.BytesIO, title: str, subtitle: str, raw_data: str) -> s
 
     c.setFont("Helvetica", 8)
     c.setFillColorRGB(0.55, 0.55, 0.55)
-    
-    # FIX: Strip newlines so ReportLab draws a clean, single line of text
-    clean_data = raw_data.replace("\n", " ").replace("\r", "")
-    display_data = clean_data if len(clean_data) <= 90 else clean_data[:87] + "..."
+    display_data = raw_data if len(raw_data) <= 90 else raw_data[:87] + "..."
     c.drawCentredString(page_w / 2, qr_y - 0.35 * inch, display_data)
 
     c.setFont("Helvetica-Oblique", 9)
@@ -145,9 +153,11 @@ def _make_pdf(qr_buf: io.BytesIO, title: str, subtitle: str, raw_data: str) -> s
     pdf_buf.seek(0)
     return base64.b64encode(pdf_buf.read()).decode("utf-8")
 
+
 # ---------------------------------------------------------------------------
 # Response builders
 # ---------------------------------------------------------------------------
+
 
 def _success(pdf_b64: str, qr_type: str, summary: str) -> dict[str, Any]:
     return {
@@ -158,12 +168,15 @@ def _success(pdf_b64: str, qr_type: str, summary: str) -> dict[str, Any]:
         "instructions": "Decode the pdf_base64 string and save it as a .pdf file to download your QR code.",
     }
 
+
 def _error(message: str) -> dict[str, Any]:
     return {"success": False, "error": message}
+
 
 # ===================================================================
 # QR GENERATORS
 # ===================================================================
+
 
 def generate_url_qr(url: str, style: str = "square", fg_color: str = "#000000", bg_color: str = "#FFFFFF") -> dict:
     url = _sanitize_url(url)
@@ -173,6 +186,7 @@ def generate_url_qr(url: str, style: str = "square", fg_color: str = "#000000", 
         return _success(pdf_b64, "url", f"QR code for {url}")
     except Exception as e:
         return _error(str(e))
+
 
 def generate_wifi_qr(
     ssid: str,
@@ -184,13 +198,8 @@ def generate_wifi_qr(
     bg_color: str = "#FFFFFF",
 ) -> dict:
     encryption = encryption.upper().strip()
-    
-    # FIX: Map AI's "None" output to the required "NOPASS" token
-    if encryption == "NONE":
-        encryption = "NOPASS"
-        
     if encryption not in ("WPA", "WPA2", "WEP", "NOPASS"):
-        return _error(f"Invalid encryption type: {encryption}. Use WPA, WPA2, WEP, or None.")
+        return _error(f"Invalid encryption type: {encryption}. Use WPA, WPA2, WEP, or nopass.")
 
     enc_token = "WPA" if encryption in ("WPA", "WPA2") else encryption
     hidden_flag = "true" if hidden else "false"
@@ -202,6 +211,7 @@ def generate_wifi_qr(
         return _success(pdf_b64, "wifi", f"WiFi QR for network '{ssid}'")
     except Exception as e:
         return _error(str(e))
+
 
 def generate_vcard_qr(
     full_name: str,
@@ -249,6 +259,7 @@ def generate_vcard_qr(
     except Exception as e:
         return _error(str(e))
 
+
 def generate_email_qr(
     email_address: str,
     subject: str = "",
@@ -279,6 +290,7 @@ def generate_email_qr(
     except Exception as e:
         return _error(str(e))
 
+
 def generate_sms_qr(
     phone_number: str,
     message: str = "",
@@ -303,6 +315,7 @@ def generate_sms_qr(
         return _success(pdf_b64, "sms", f"SMS QR for {phone_number.strip()}")
     except Exception as e:
         return _error(str(e))
+
 
 def generate_event_qr(
     event_name: str,
@@ -368,6 +381,7 @@ def generate_event_qr(
     except Exception as e:
         return _error(str(e))
 
+
 def generate_medical_id_qr(
     full_name: str,
     date_of_birth: str = "",
@@ -432,3 +446,37 @@ def generate_medical_id_qr(
         return _success(pdf_b64, "medical_id", f"Medical ID QR for {full_name.strip()}")
     except Exception as e:
         return _error(str(e))
+
+
+def list_supported_types() -> dict:
+    return {
+        "types": {
+            "url": {"description": "Website or link QR code", "required_fields": ["url"]},
+            "wifi": {"description": "WiFi network credentials", "required_fields": ["ssid", "password"]},
+            "vcard": {"description": "Contact card (vCard)", "required_fields": ["full_name", "phone OR email"]},
+            "email": {"description": "Pre-filled email", "required_fields": ["email_address"]},
+            "sms": {"description": "Pre-filled SMS message", "required_fields": ["phone_number"]},
+            "event": {"description": "Calendar event (iCalendar)", "required_fields": ["event_name", "start_datetime", "end_datetime"]},
+            "medical_id": {"description": "Emergency medical ID", "required_fields": ["full_name"]},
+        },
+        "styling": {
+            "available_styles": ["square", "rounded", "circle"],
+            "default_style": "square",
+            "color_format": "Hex color codes (e.g. #FF5733)",
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Router - maps type string to generator function
+# ---------------------------------------------------------------------------
+
+GENERATORS = {
+    "url": generate_url_qr,
+    "wifi": generate_wifi_qr,
+    "vcard": generate_vcard_qr,
+    "email": generate_email_qr,
+    "sms": generate_sms_qr,
+    "event": generate_event_qr,
+    "medical_id": generate_medical_id_qr,
+}
