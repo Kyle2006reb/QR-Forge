@@ -66,8 +66,11 @@ if __name__ == "__main__":
 
 
 if __name__ == "__main__":
-    # Render assigns a dynamic port using the $PORT environment variable
-    port = int(os.environ.get("PORT", 8000))
+    import os
     
-    # Start the server explicitly in SSE streaming mode
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    # Force FastMCP to listen on all public interfaces (required for Render)
+    os.environ["HOST"] = "0.0.0.0"
+    
+    # Render automatically sets the $PORT environment variable. 
+    # FastMCP will detect it and start the SSE server on that port.
+    mcp.run(transport="sse")
