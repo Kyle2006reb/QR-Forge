@@ -1,0 +1,9 @@
+qrcode[pil]>=7.4
+reportlab>=4.0
+Pillow>=10.0
+mcp
+fastmcp
+qrcode
+Pillow
+reportlab
+uvicorn
