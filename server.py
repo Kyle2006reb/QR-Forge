@@ -4,7 +4,7 @@ QR Forge - FastMCP Server
 Run this file to start the SSE streaming server required by Athena.
 Command: mcp run server.py
 """
-
+import os
 from mcp.server.fastmcp import FastMCP
 from qr_core import (
     generate_url_qr,
@@ -63,3 +63,11 @@ def create_medical_id_qr(full_name: str, date_of_birth: str = "", blood_type: st
 if __name__ == "__main__":
     # Start the server using standard stdio for local debugging, or use `mcp run server.py` for SSE
     mcp.run()
+
+
+if __name__ == "__main__":
+    # Render assigns a dynamic port using the $PORT environment variable
+    port = int(os.environ.get("PORT", 8000))
+    
+    # Start the server explicitly in SSE streaming mode
+    mcp.run(transport="sse", host="0.0.0.0", port=port)
